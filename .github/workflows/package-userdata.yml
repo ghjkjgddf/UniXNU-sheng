@@ -1,0 +1,89 @@
+name: package-userdata
+
+# Builds the userdata image (OS + SystemOS windows) that a FIRST installation must
+# flash to the tablet: python3 UniXNU/unixnu build userdata. The images are AEA
+# encrypted, so this runs on macOS with the ipsw tool and /usr/bin/aea.
+
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: "OS profile of the userdata image"
+        type: choice
+        options: ["27"]
+        default: "27"
+
+permissions:
+  contents: read
+
+jobs:
+  userdata:
+    runs-on: macos-26
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: device
+          submodules: recursive
+      - uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: 82b847c4ac3f68a57024b3082ffa3a03442defd9
+          path: UniXNU
+          submodules: recursive
+      - name: tools
+        run: |
+          brew install blacktop/tap/ipsw
+          ok=1
+          for t in python3 ipsw aea hdiutil; do
+            command -v "$t" >/dev/null || { echo "missing tool: $t"; ok=0; }
+          done
+          [ "$ok" = 1 ]
+      - name: build userdata
+        working-directory: device
+        env:
+          UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+        run: |
+          python3 ../UniXNU/unixnu build userdata -D . --os 27
+      - name: split
+        working-directory: device
+        run: |
+          img=$(find out -name userdata-root.img | head -n1)
+          rep=$(find out -name userdata-root.json | head -n1)
+          test -n "$img" && test -f "$img"
+          test -n "$rep" && test -f "$rep"
+          mkdir -p dist
+          cp "$rep" dist/
+          split -b 3700m -d -a 2 "$img" dist/userdata
+          rm -rf ../UniXNU/.cache
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: userdata-27-part1
+          retention-days: 1
+          if-no-files-found: ignore
+          path: device/dist/userdata01
+      - uses: actions/upload-artifact@v4
+        with:
+          name: userdata-27-part2
+          retention-days: 1
+          if-no-files-found: ignore
+          path: device/dist/userdata02
+      - uses: actions/upload-artifact@v4
+        with:
+          name: userdata-27-part3
+          retention-days: 1
+          if-no-files-found: ignore
+          path: device/dist/userdata03
+      - uses: actions/upload-artifact@v4
+        with:
+          name: userdata-27-part4
+          retention-days: 1
+          if-no-files-found: ignore
+          path: device/dist/userdata04
+      - uses: actions/upload-artifact@v4
+        with:
+          name: userdata-27-report
+          retention-days: 1
+          if-no-files-found: ignore
+          path: device/dist/userdata-root.json
