@@ -3,14 +3,18 @@
 from pathlib import Path
 import json,hashlib,subprocess
 root=Path(__file__).resolve().parents[1];out=root/'build/cpu-desktop/ui-trace';out.mkdir(parents=True,exist_ok=True)
-s=(root/'kits/sheng/BootUiTraceProbe.c').read_text();body=s[s.index('static struct bt_entry samples'):s.index('// One kernel thread found')]
+s=(root/'kits/sheng/BootUiTraceProbe.c').read_text();body=s[s.index('void *IOMallocAligned'):s.index('// One kernel thread found')]
 prefix=r'''
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <assert.h>
 #include <pthread.h>
+typedef size_t vm_size_t;
+typedef size_t vm_offset_t;
+static void *IOMallocAligned(vm_size_t n,vm_offset_t a){(void)a;return calloc(1,n);}
 #include "BootUiTraceCore.h"
 #include "BootUiTraceDetails.h"
 #define KERN_SUCCESS 0

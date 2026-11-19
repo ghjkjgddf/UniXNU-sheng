@@ -54,7 +54,6 @@ extern "C" {volatile int32_t sheng_sleep_stats[8];}
 
 namespace {
 constexpr uint32_t kIo = 0x4, kIntrCfg = 0x8, kIntrStatus = 0xc;
-constexpr IOOptionBits kWakeEventSource = 0x1;   // kIOPMWakeEventSource (IOPMPrivate.h)
 
 IOMemoryMap *gTlmmMap;
 uintptr_t gTlmm;
@@ -78,8 +77,9 @@ void prepare() {
     for (uint32_t i = 0; i < SHENG_SLEEP_GPIO_COUNT; ++i) {
         if (sheng_sleep_pin_usable(i) && gAsleep[i] != gSaved[i]) *reg(i, kIntrCfg) = gAsleep[i];
     }
-    // A closed lid's status is the edge of its closing: cleared, so that only an open lid holds the summary.
-    if (lidClosed()) *reg(SHENG_SLEEP_LID_GPIO, kIntrStatus) = 0;
+    // An edge latched before the wait, open or closed (ShengSleep.h sheng_sleep_clear_lid_status): cleared, so that only the lid
+    // moving while asleep raises the summary.
+    if (sheng_sleep_clear_lid_status(lidClosed())) *reg(SHENG_SLEEP_LID_GPIO, kIntrStatus) = 0;
     barrier();
     sheng_sleep_stats[1] = sheng_sleep_stats[1] + 1;
 }
@@ -113,6 +113,9 @@ void tick() {
 
 const armcpu_sleep_board gBoard = {prepare, shouldWake, restore, kWakeSpis, sizeof kWakeSpis / sizeof kWakeSpis[0], tick, 10};
 
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+constexpr IOOptionBits kWakeEventSource = 0x1;   // kIOPMWakeEventSource (IOPMPrivate.h)
+
 // The wake sources a sleep can count on: the keyboard probe past its interrupt step (stage 5 and on) holds the TLMM summary, the
 // buttons armed (stage 3) hold the SPMI line.
 bool lidArmed() {return &native_keyboard_stats && native_keyboard_stats[0] >= 5;}
@@ -123,7 +126,6 @@ uint64_t counterMs(uint64_t ticks) {
     return hz ? ticks / (hz / 1000) : 0;
 }
 
-#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
 IOReturn sleepWake(void *, void *, natural_t message, IOService *, void *, vm_size_t) {
     IOPMrootDomain *root = IOService::getPMRootDomain();
     switch (message) {

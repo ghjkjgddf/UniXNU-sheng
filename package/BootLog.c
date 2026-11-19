@@ -371,12 +371,15 @@ extern uint32_t native_gpu_perf_vote[2] __attribute__((weak_import));
 extern volatile uint32_t native_gpu_dcvs[15] __attribute__((weak_import));
 extern unsigned armcpu_stats_row(unsigned index, char *row, unsigned size) __attribute__((weak_import));
 extern volatile uint32_t sheng_edge_cross_type_steals[2] __attribute__((weak_import)), sheng_edge_idle_beside_excess[2] __attribute__((weak_import));
-extern uint64_t cs_native4k_read_ticks __attribute__((weak_import)), cs_native4k_hash_ticks __attribute__((weak_import)),
-  cs_native4k_bytes __attribute__((weak_import));
+extern uint64_t cs_native4k_read_ticks __attribute__((weak_import));
+extern uint64_t cs_native4k_hash_ticks __attribute__((weak_import));
+extern uint64_t cs_native4k_bytes __attribute__((weak_import));
 extern unsigned long cs_native4k_ready_blobs __attribute__((weak_import));
-extern uint64_t cs_native4k_digest_wall[2] __attribute__((weak_import)), cs_native4k_digest_cpu[2] __attribute__((weak_import)),
-  cs_native4k_digest_bytes[2] __attribute__((weak_import)), cs_native4k_chunk_ticks __attribute__((weak_import)),
-  cs_native4k_record_ticks __attribute__((weak_import));
+extern uint64_t cs_native4k_digest_wall[2] __attribute__((weak_import));
+extern uint64_t cs_native4k_digest_cpu[2] __attribute__((weak_import));
+extern uint64_t cs_native4k_digest_bytes[2] __attribute__((weak_import));
+extern uint64_t cs_native4k_chunk_ticks __attribute__((weak_import));
+extern uint64_t cs_native4k_record_ticks __attribute__((weak_import));
 extern unsigned long cs_native4k_chunks_made __attribute__((weak_import));
 extern volatile uint32_t sheng_edge_idle_beside_queued[2][8] __attribute__((weak_import));
 extern volatile uint32_t native_touch_cost[9] __attribute__((weak_import));
@@ -653,7 +656,7 @@ extern uint32_t sheng_prof_cpu[8] __attribute__((weak_import));
 extern void proc_name(int pid, char *buf, int size);
 // Run-time blocks: the kernel's __DATA has no room for these (prelink: native __DATA overlaps a retained segment).
 static uint64_t *prof_snap, *prof_rank;
-static char *compose_spawn;
+static char *compose_spawn, *compose_scratch;
 static void prof_sort(uint64_t *v, size_t n) {
   for (size_t start = n / 2; start-- > 0;)
     for (size_t root = start;;) {size_t c = 2 * root + 1; if (c >= n) break; if (c + 1 < n && v[c + 1] > v[c]) ++c; if (v[root] >= v[c]) break;
@@ -911,8 +914,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // Every traced process's stacks (the banner shows only what fits the panel): role 0..3 are the boot-ui-focus slots, main thread in full
   // (symbolicate with unslid = address - cache slide), then its thread groups.
   LOG_AT("ui trace roles");
-  if (&boot_ui_trace_role_rows) {
-    static char rows[64][120];
+  if (&boot_ui_trace_role_rows && compose_scratch) {
+    char (*rows)[120] = (char (*)[120])compose_scratch;
     at = put(out, at, cap, "[stacks]", 10);
     for (unsigned role = 0; role < 4; ++role) {
       unsigned n = boot_ui_trace_role_rows(role, rows, 64, 2);   // 2: with each thread group's deeper frames
@@ -921,8 +924,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // Threads stuck in an uninterruptible kernel wait for 20 s or more, in any process (BootUiTraceProbe.c boot_stuck_scan).
   LOG_AT("stuck scan");
-  if (&boot_stuck_scan && &boot_stuck_rows) {
-    static char rows[40][120];
+  if (&boot_stuck_scan && &boot_stuck_rows && compose_scratch) {
+    char (*rows)[120] = (char (*)[120])compose_scratch;
     boot_stuck_scan(now);
     unsigned n = boot_stuck_rows(rows, 40);
     at = put(out, at, cap, "[stuck]", 8);
@@ -930,8 +933,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // The busiest kernel threads of the last interval (BootUiTraceProbe.c boot_kcpu_scan).
   LOG_AT("kernel cpu scan");
-  if (&boot_kcpu_scan && &boot_kcpu_rows) {
-    static char rows[6][120];
+  if (&boot_kcpu_scan && &boot_kcpu_rows && compose_scratch) {
+    char (*rows)[120] = (char (*)[120])compose_scratch;
     boot_kcpu_scan(now);
     unsigned n = boot_kcpu_rows(rows, 6);
     if (n) at = put(out, at, cap, "[kernel cpu]", 13);
@@ -939,16 +942,17 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // The Wi-Fi receive path's counters (WifiNet.cpp), while frames arrive.
   LOG_AT("wifi rx");
-  if (&sheng_wifi_rx_rows) {
-    static char rows[4][120];
+  if (&sheng_wifi_rx_rows && compose_scratch) {
+    char (*rows)[120] = (char (*)[120])compose_scratch;
     unsigned n = sheng_wifi_rx_rows(rows, 4);
     if (n) at = put(out, at, cap, "[wifi rx]", 10);
     for (unsigned i = 0; i < n; ++i) at = put(out, at, cap, rows[i], 120);
   }
   LOG_AT("display state");
-  if (log_display_on && &native_legacy_state_words) {
-    static char words[240];
-    if (native_legacy_state_words(words, sizeof words)) {at = put(out, at, cap, "[display state]", 16); at = put(out, at, cap, words, sizeof words);}
+  if (log_display_on && &native_legacy_state_words && compose_scratch) {
+    char *const words = compose_scratch;
+    memset(words, 0, 240);
+    if (native_legacy_state_words(words, 240)) {at = put(out, at, cap, "[display state]", 16); at = put(out, at, cap, words, 240);}
   }
   if (log_display_on && &native_legacy_prepare_report) {
     char row[220];
@@ -1042,9 +1046,10 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     at = put(out, at, cap, row, sizeof row);
   }
   LOG_AT("swap timeline");
-  if (log_display_on && &native_legacy_swap_timeline) {
-    static char timeline[4096];
-    if (native_legacy_swap_timeline(timeline, sizeof timeline)) {
+  if (log_display_on && &native_legacy_swap_timeline && compose_scratch) {
+    char *const timeline = compose_scratch;
+    memset(timeline, 0, 4096);
+    if (native_legacy_swap_timeline(timeline, 4096)) {
       at = put(out, at, cap, "[swap timeline]", 16);
       for (char *line = timeline; *line && at + 130 < cap;) {
         char *end = strchr(line, '\n');
@@ -1062,9 +1067,10 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // The framebuffer user clients' notification slots (is the render server's vsync registered?).
   LOG_AT("display clients");
-  if (log_gpu_on && &native_legacy_clients_dump) {
-    static char dump[4096];
-    unsigned n = native_legacy_clients_dump(dump, sizeof dump);
+  if (log_gpu_on && &native_legacy_clients_dump && compose_scratch) {
+    char *const dump = compose_scratch;
+    memset(dump, 0, 4096);
+    unsigned n = native_legacy_clients_dump(dump, 4096);
     if (n) {
       at = put(out, at, cap, "[mfb clients]", 14);
       for (char *line = dump; *line && at + 130 < cap;) {
@@ -1078,9 +1084,10 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // The display object's properties now (refresh intervals, timing, scale): the lines the original driver published.
   LOG_AT("display properties");
-  if (log_display_on && &native_legacy_properties_now) {
-    static char props[7168];
-    unsigned n = native_legacy_properties_now(props, sizeof props);
+  if (log_display_on && &native_legacy_properties_now && compose_scratch) {
+    char *const props = compose_scratch;
+    memset(props, 0, 7168);
+    unsigned n = native_legacy_properties_now(props, 7168);
     if (n) {
       at = put(out, at, cap, "[display]", 10);
       // The XML is one long line; 116 characters per row with a prefix, and a tag per key on its own row so refresh/timing keys stand out.
@@ -1116,8 +1123,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // The traced processes' threads with the highest context-switch rate (they are idle in every stack sample but woken hundreds of times a second).
   LOG_AT("ui trace hot");
-  if (&boot_ui_trace_hot_rows) {
-    static char hot[96][120];
+  if (&boot_ui_trace_hot_rows && compose_scratch) {
+    char (*hot)[120] = (char (*)[120])compose_scratch;
     unsigned n = boot_ui_trace_hot_rows(hot, 96);
     if (n) {char head[64]; snprintf(head, sizeof head, "[hot] kernel slide=%lx", (unsigned long)vm_kernel_slide); at = put(out, at, cap, head, sizeof head);}
     for (unsigned i = 0; i < n; ++i) at = put(out, at, cap, hot[i], 120);
@@ -2617,9 +2624,10 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // The sampling profile (BootProgress.c): which processes the interrupts landed in and where, at most 6 KiB of the slot.
   LOG_AT("profile rows");
-  if (&boot_progress_profile_rows) {
-    static char profile[6144];
-    const size_t n = boot_progress_profile_rows(profile, sizeof profile);
+  if (&boot_progress_profile_rows && compose_scratch) {
+    char *const profile = compose_scratch;
+    memset(profile, 0, 6144);
+    const size_t n = boot_progress_profile_rows(profile, 6144);
     if (n) {
       at = put(out, at, cap, "[profile]", 10);
       for (char *line = profile; *line;) {
@@ -3177,6 +3185,7 @@ void boot_log_tick(unsigned now) {
   prof_snap = (uint64_t *)IOMalloc(1024 * sizeof(uint64_t));
   prof_rank = (uint64_t *)IOMalloc(2048 * sizeof(uint64_t));
   compose_spawn = (char *)IOMalloc(16384);
+  compose_scratch = (char *)IOMalloc(16384);
   export_lock = IOLockAlloc();
   uint32_t checkpoint_mode = 0;
   if (PE_parse_boot_argn("storage-probe", &checkpoint_mode, sizeof checkpoint_mode) && checkpoint_mode == 1) {

@@ -1,0 +1,34 @@
+name: cargo-diag
+on:
+  workflow_dispatch:
+jobs:
+  diag:
+    runs-on: macos-26-intel
+    steps:
+      - name: setup rust like package tools step
+        run: |
+          brew install rustup
+          rustup toolchain install 1.98.0 --profile minimal --component rust-src
+          mkdir -p "$HOME/.cargo/bin"
+          ln -f "$(command -v rustup)" "$HOME/.cargo/bin/cargo"
+          ln -f "$(command -v rustup)" "$HOME/.cargo/bin/rustc"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: diagnose cargo proxy
+        run: |
+          echo "--- what is /usr/local/bin/rustup (expect a small shim):"
+          file /usr/local/bin/rustup || true
+          wc -c /usr/local/bin/rustup || true
+          cat /usr/local/bin/rustup || true
+          echo "--- where is the real rustup binary:"
+          ls -la "$(brew --prefix)/Cellar/rustup/" 2>/dev/null || true
+          find "$(brew --prefix)/Cellar/rustup" -type f -name "rustup*" 2>/dev/null | head -5 || true
+          echo "--- TEST A: rustup run bypass (expect cargo 1.98.0):"
+          rustup run 1.98.0 cargo --version || true
+          echo "--- TEST B: rustup run bypass with -Z BEFORE build (expect cargo build help):"
+          RUSTC_BOOTSTRAP=1 rustup run 1.98.0 cargo -Z build-std=std,panic_unwind build --help 2>&1 | head -8 || true
+          echo "--- TEST C: direct toolchain cargo with -Z BEFORE build (expect cargo build help):"
+          TOOLCHAIN_CARGO="$HOME/.rustup/toolchains/1.98.0-x86_64-apple-darwin/bin/cargo"
+          ls -la "$TOOLCHAIN_CARGO" || true
+          RUSTC_BOOTSTRAP=1 "$TOOLCHAIN_CARGO" -Z build-std=std,panic_unwind build --help 2>&1 | head -8 || true
+          echo "diag done"

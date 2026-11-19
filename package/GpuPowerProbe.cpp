@@ -1190,11 +1190,11 @@ static bool walkProbe(NativeAdrenoVm *vm) {
     uint64_t phys[2] = {};
     for (size_t j = 0; !st && j < mem.spanCount(); ++j)
         for (size_t at = 0; at < mem.spans()[j].bytes; at += 4096) phys[(mem.spans()[j].offset + at) / 4096] = mem.spans()[j].physical + at;
-    static uint32_t words[1024];
+    uint32_t *words = static_cast<uint32_t *>(IOMallocAligned(4096, 4096));
     unsigned dirtyAt = 0, copied = 0;
     uint32_t fault[4] = {};
     bool pass = false;
-    for (unsigned attempt = 0; attempt < 8 && !st && phys[0] && phys[1] && !dirtyAt; ++attempt) {
+    for (unsigned attempt = 0; attempt < 8 && !st && phys[0] && phys[1] && words && !dirtyAt; ++attempt) {
         uint64_t handle = 0, pte = 0;
         native_adreno_walk_coherent[0] = 1;   // this map's table pages: ordering only
         st = vm->map(&mem, 0, kBase + attempt * 0x200000ull, 3, 1, 3, &handle);
@@ -1221,6 +1221,7 @@ static bool walkProbe(NativeAdrenoVm *vm) {
     (void)NativeAdrenoMaintainOwnedPages(buf, kBytes, NativeAdrenoCleanInvalidate);
     (void)mem.release();
     IOFreeAligned(buf, kBytes);
+    if (words) IOFreeAligned(words, 4096);
     snprintf(native_gpu_walk_row, sizeof native_gpu_walk_row, "W d%u c%u f%x s%x -> %s", dirtyAt, copied, fault[0], uint32_t(st),
              pass ? "on" : "off");
     return pass;
@@ -1244,9 +1245,9 @@ void coherenceProbe(NativeAdrenoVm *vm) {
     uint64_t phys[4] = {};
     for (size_t j = 0; !st && j < mem.spanCount(); ++j)
         for (size_t at = 0; at < mem.spans()[j].bytes; at += 4096) phys[(mem.spans()[j].offset + at) / 4096] = mem.spans()[j].physical + at;
-    static uint32_t words[1024];
+    uint32_t *words = static_cast<uint32_t *>(IOMallocAligned(4096, 4096));
     bool pass = false;
-    if (!st && phys[0] && phys[1] && phys[2] && phys[3]) {
+    if (!st && words && phys[0] && phys[1] && phys[2] && phys[3]) {
         k[0] = 3;
         volatile uint32_t *S = reinterpret_cast<volatile uint32_t *>(buf), *D = S + 1024, *R = S + 2048, *T = S + 3072;
         // read direction. The proof needs S's new words still dirty in a CPU cache (DRAM still holding the old ones, k[1] >= 48 of 64
@@ -1290,6 +1291,7 @@ void coherenceProbe(NativeAdrenoVm *vm) {
     if (buf) (void)NativeAdrenoMaintainOwnedPages(buf, kBytes, NativeAdrenoCleanInvalidate);
     (void)mem.release();
     if (buf) IOFreeAligned(buf, kBytes);
+    if (words) IOFreeAligned(words, 4096);
     k[7] = pass;
     native_adreno_io_coherent = pass ? 1 : 0;
     // The walk proof needs the data path proved (it reads the copy through it); gpu-walk=0 keeps every table page cleaned.

@@ -143,12 +143,19 @@ void native_legacy_surface_rejected(uint64_t width,uint64_t height,uint32_t form
     native_legacy_rej_surface[4]=stride;native_legacy_rej_surface[5]=allocation;native_legacy_rej_surface[6]=bytes;
 }
 // The display's request layout (rectangles, masks, options, dimensions, surfaces); the iPadOS 17 one when the display has none.
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
 extern "C" const unsigned native_legacy_request_layout[6] __attribute__((weak_import));
+#endif
 static void recordRejectedSwap(unsigned reason,const void *request,const void *surface) {
     const unsigned char *bytes=reinterpret_cast<const unsigned char *>(request);
     if(!bytes)return;
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
     static const unsigned ios17[6]={17,81,792,804,816,2624};
     const unsigned *layout=&native_legacy_request_layout?native_legacy_request_layout:ios17;
+#else
+    static const unsigned ios17[6]={17,81,792,804,816,2624};
+    const unsigned *layout=ios17;
+#endif
     native_legacy_rej_reason=reason;
     uint64_t surfaces[4]={};memcpy(surfaces,bytes+layout[5],sizeof(surfaces));
     for(unsigned i=0;i<4;++i)native_legacy_rej_surfaces[i]=surfaces[i];
@@ -532,8 +539,10 @@ extern "C" void sheng_video_probe(void) __attribute__((weak_import));
 extern void sheng_wifi_probe(void);
 extern void sheng_bluetooth_probe(void) __attribute__((weak_import));
 extern void sheng_usb_probe(void) __attribute__((weak_import));
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
 extern "C" void sheng_ethernet_probe(void) __attribute__((weak_import));   // macOS builds only (ShengEthernet.cpp)
 extern "C" void sheng_software_aes_probe(void) __attribute__((weak_import));   // macOS builds only (SoftwareAesProbe.cpp)
+#endif
 extern void sheng_adsp_probe(void);
 extern void sheng_battery_probe(void);
 extern void sheng_audio_probe(void);
@@ -617,8 +626,10 @@ void busyReport(void *, wait_result_t) {
 
 void native_legacy_display_late_probe(void) {
     {thread_t thread = nullptr; if (kernel_thread_start(busyReport, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);}
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
     // First: AppleImage4's start already waits for an IOAESAccelerator, holding its expert lock (SoftwareAesProbe.cpp).
     if (sheng_software_aes_probe) sheng_software_aes_probe();
+#endif
     native_keystore_probe();
     sheng_cpufreq_probe();
     if (sheng_thermal_probe) sheng_thermal_probe();
@@ -631,7 +642,9 @@ void native_legacy_display_late_probe(void) {
     sheng_wifi_probe();
     if (sheng_bluetooth_probe) sheng_bluetooth_probe();
     if (sheng_usb_probe) sheng_usb_probe();
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
     if (sheng_ethernet_probe) sheng_ethernet_probe();
+#endif
     sheng_adsp_probe();
     sheng_battery_probe();
     sheng_audio_probe();

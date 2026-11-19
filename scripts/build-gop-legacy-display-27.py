@@ -300,7 +300,8 @@ def compile_cpp(src, dst, extra=()):
         elif not value.startswith('-W'):
             cmd.append(value)
         i += 1
-    cmd += ['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-unnecessary-virtual-specifier', '-Wno-c99-designator',
+    # -Os: the kernel's native text has little room left below the collection data.
+    cmd += ['-Os', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-unnecessary-virtual-specifier', '-Wno-c99-designator',
             '-Wno-reorder-init-list', '-Wno-deprecated-enum-enum-conversion', '-I', str(ROOT / '.cache/xnu-work/osfmk'), *extra]
     run(cmd, cwd=r['directory'])
 
@@ -322,7 +323,7 @@ def compile_c(src, dst, recipe='osfmk/DEVELOPMENT/startup.o.json'):
         elif not value.startswith('-W'):
             cmd.append(value)
         i += 1
-    cmd += ['-Wall', '-Wextra', '-Werror', '-mgeneral-regs-only', '-I', str(ROOT / '.cache/xnu-work/osfmk'), '-I', str(ROOT / 'kits/sheng')]
+    cmd += ['-Os', '-Wall', '-Wextra', '-Werror', '-mgeneral-regs-only', '-I', str(ROOT / '.cache/xnu-work/osfmk'), '-I', str(ROOT / 'kits/sheng')]
     run(cmd, cwd=rc['directory'])
 
 
@@ -379,7 +380,11 @@ extern "C" int boot_progress_prepare_scanout(void) {return 1;}
 extern "C" void boot_progress_cancel_scanout(void) {}
 extern "C" void boot_progress_stage(const char *) {}
 extern "C" int boot_progress_pulse_anchor(uintptr_t,uint64_t,unsigned,unsigned,unsigned) {return 0;}
-''')
+''' + ('' if MACOS else '''
+// Non-macOS kernels lack the macOS gpupool-device-pager-close and payload-addon-release patches referenced weakly by Adreno740 and RamBlock.
+extern "C" IOReturn iokit_physical_descriptor_close_notify(void *,void (*)(void *),void *) {return kIOReturnUnsupported;}
+extern "C" bool ml_static_mfree_prepare(uintptr_t,size_t) {return false;}
+'''))
 compile_cpp(support, OUT / 'LegacyDisplaySupport27.o')
 # The keystore state service (AppleKeyStoreState) and its probe, unchanged from iPadOS 17.
 keystore_source = ROOT / 'kits/sheng/KeyStoreProbe.cpp'
@@ -450,6 +455,7 @@ while i < len(hid_command):
     elif value != '-DNATIVE_HID_SOURCE_API=1':
         keyboard_command.append(value)
     i += 1
+keyboard_command.append('-Os')
 run(keyboard_command, cwd=r['directory'])
 hid_bindings = {n: int(v, 16) + slide for n, v in hid_abi['bindings'].items()}
 by_diversity = {}
@@ -732,7 +738,7 @@ iris_flags = ('-I', str(IRIS / 'include'), '-I', str(IRIS / 'kernel'), '-I', str
               '-I', str(IRIS / 'deps/linux/drivers/media/platform/qcom/iris'), '-I', str(ROOT / 'kits/Sm8550Platform'), '-I', str(ROOT / 'kits/ArmSmmu4K'))
 for src in (KITS / 'VideoProbe.cpp', KITS / 'VideoToolboxProbe.cpp', IRIS / 'kernel/IrisMedia.cpp', IRIS / 'kernel/VtHost.cpp',
             IRIS / 'kernel/VtParavirt.cpp'):
-    compile_cpp(src, IRIS_OUT / (src.stem + '.o'), iris_flags + ('-Os',))   # native text is short of room
+    compile_cpp(src, IRIS_OUT / (src.stem + '.o'), iris_flags)   # -Os set in compile_cpp: native text is short of room
 run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_VtParavirt.cpp',
      IRIS_OUT / 'VtParavirt.o', IRIS_OUT / 'VtParavirt.late.o'])
 input_objects += [IRIS_OUT / 'VideoProbe.o', IRIS_OUT / 'VideoToolboxProbe.o', IRIS_OUT / 'IrisMedia.o', IRIS_OUT / 'VtHost.o',

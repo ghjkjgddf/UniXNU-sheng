@@ -1,0 +1,37 @@
+name: mesa-apply-test
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: macos-26-intel
+    steps:
+      - name: checkout core
+        uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: 82b847c4ac3f68a57024b3082ffa3a03442defd9
+          path: core
+      - name: mesa apply tests
+        run: |
+          set +e
+          set -x
+          git --version
+          which git
+          ls core/patches/mesa/ | wc -l
+          PATCHES="freedreno-tools-nir ir3-darwin-build-id ir3-portable-asm-roundtrip offline-adreno-compiler-probe turnip-darwin-kmd turnip-graphics-cache-feedback turnip-empty-scissor turnip-builtin-shader-pack turnip-host-import-images turnip-render-mode-for-attachment-memory turnip-gmem-mutable-swap turnip-current-queue-priorities"
+          git init -q mesa-base
+          git -C mesa-base fetch --depth=1 https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa 85fda3b36405bcaea8bffc64aa4f2651dc90770d
+          git -C mesa-base checkout --detach FETCH_HEAD
+          setup() {
+            rm -rf mesa-work
+            cp -r mesa-base mesa-work
+            for p in $PATCHES; do git -C mesa-work apply "$PWD/core/patches/mesa/$p.patch" || { echo "SETUP FAIL $p"; return 1; }; done
+            return 0
+          }
+          echo "===== TEST A: original patch (control) ====="
+          setup; git -C mesa-work apply "$PWD/core/patches/mesa/turnip-frame-diagnostics.patch" && echo "RESULT A: ORIGINAL OK" || echo "RESULT A: ORIGINAL FAILED"
+          echo "===== TEST B: patch + index line ====="
+          setup; python3 -c "lines=open('core/patches/mesa/turnip-frame-diagnostics.patch').read().splitlines(keepends=True); out=[]; [out.extend([ln, 'index 0000000..49247d30eb88356ec559422e2a6818c0a85237f3\n']) if ln.rstrip('\n')=='new file mode 100644' else out.append(ln) for ln in lines]; open('/tmp/fixed.patch','w').writelines(out)"; head -6 /tmp/fixed.patch; git -C mesa-work apply /tmp/fixed.patch && echo "RESULT B: FIXED OK" || echo "RESULT B: FIXED FAILED"
+          echo "===== TEST C: patch -p1 on original ====="
+          setup; patch -p1 -d mesa-work < core/patches/mesa/turnip-frame-diagnostics.patch && echo "RESULT C: PATCH-CMD OK" || echo "RESULT C: PATCH-CMD FAILED"
+          echo "===== DONE ====="
