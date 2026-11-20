@@ -84,6 +84,7 @@ jobs:
           } >> "$GITHUB_PATH"
           rustup toolchain install 1.98.0 --profile minimal --component rust-src
           mkdir -p "$HOME/.cargo/bin"
+          rm -f "$HOME/.cargo/bin/cargo" "$HOME/.cargo/bin/rustc"
           TC=$(ls -d "$HOME"/.rustup/toolchains/1.98.0-*/ | head -1)
           test -x "${TC}bin/cargo"
           cat > "$HOME/.cargo/bin/cargo" <<EOF
