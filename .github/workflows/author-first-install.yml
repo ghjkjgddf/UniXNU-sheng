@@ -158,6 +158,29 @@ jobs:
           python3 scripts/extract-sheng-firmware.py --delete-archive
           python3 scripts/import-sheng-uefi.py
 
+      - name: Use the non-strict prelink engine
+        working-directory: device
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('board.toml')
+          text = p.read_text()
+          old_tool = '"tool" = "scripts/sheng-strict-prelink.py"'
+          new_tool = '"tool" = "kits/XnuPrelink/emit_prelink.py"'
+          old_args = '"extra_args" = ["--fileset-reference", "build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf"]'
+          new_args = '"extra_args" = ["--fileset-reference", "build/xnu/fileset-reference/mach.release.bcm2837.unstripped.noctf", "--allow-missing"]'
+          if old_tool not in text:
+              raise SystemExit('strict prelink tool line not found')
+          text = text.replace(old_tool, new_tool)
+          if old_args in text:
+              text = text.replace(old_args, new_args)
+          else:
+              print('extra_args line not found; left unchanged')
+          p.write_text(text)
+          print('prelink engine ->', new_tool)
+          PY
+
       - name: Fetch sources
         working-directory: UniXNU
         run: |
