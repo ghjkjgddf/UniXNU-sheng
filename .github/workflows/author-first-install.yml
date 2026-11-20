@@ -2,9 +2,10 @@ name: author-pins iPadOS 27 first install
 
 # Author-pins build: KuriyamaMirai08 device a9f0500 + UniXNU 97437dc + uefi-sheng 66421cb7.
 # This is the source combination of the public build guide. It runs the guide's
-# preparation steps, then package.sh with a NEW Data seed. The private historical
-# baseline / strict prelink acceptance is deliberately not used; this is an
-# experimental first-install build, not a qualified release.
+# preparation steps, then package.sh with a reused first-install Data seed
+# (seed/data.dbr, generated on the Intel runner by the previous attempt). The
+# private historical baseline / strict prelink acceptance is deliberately not
+# used; this is an experimental first-install build, not a qualified release.
 
 on:
   workflow_dispatch:
@@ -54,6 +55,12 @@ jobs:
           ref: 66421cb7bb5694843aec8de1ca3d1de4c20cca38
           path: uefi-sheng
           submodules: recursive
+
+      - name: Check out the host seed
+        uses: actions/checkout@v4
+        with:
+          path: host
+          sparse-checkout: seed
 
       - uses: actions/setup-python@v5
         with:
@@ -135,7 +142,10 @@ jobs:
         working-directory: device
         run: |
           set -euo pipefail
-          scripts/package.sh --os 27 --uefi ../uefi-sheng --init-data -j 3
+          cp ../host/seed/data.dbr ./data.dbr
+          sha256sum ./data.dbr
+          scripts/package.sh --os 27 --uefi ../uefi-sheng \
+            --data-ramdisk "$PWD/data.dbr" -j 3
 
       - name: Build the iPadOS root image
         working-directory: UniXNU
