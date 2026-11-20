@@ -158,6 +158,15 @@ jobs:
           python3 scripts/extract-sheng-firmware.py --delete-archive
           python3 scripts/import-sheng-uefi.py
 
+      - name: Fetch and decompress the kernelcache
+        working-directory: UniXNU
+        run: |
+          set -euo pipefail
+          cache=$(./unixnu ipsw fetch KernelCache -D ../device --os 27 | tail -1)
+          test -f "$cache"
+          echo "UNIXNU_KERNELCACHE=$cache" >> "$GITHUB_ENV"
+          echo "kernelcache=$cache"
+
       - name: Build boot image, payload and kernel
         working-directory: device
         run: |
