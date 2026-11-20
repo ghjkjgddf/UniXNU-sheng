@@ -157,6 +157,12 @@ jobs:
           python3 scripts/extract-sheng-firmware.py --delete-archive
           python3 scripts/import-sheng-uefi.py
 
+      - name: Fetch sources
+        working-directory: UniXNU
+        run: |
+          set -euo pipefail
+          ./unixnu fetch -D ../device --os 27
+
       - name: Fetch and decompress the kernelcache
         working-directory: UniXNU
         run: |
