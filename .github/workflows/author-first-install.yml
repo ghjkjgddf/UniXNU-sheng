@@ -185,7 +185,8 @@ jobs:
               chosen.append(str(path))
           print('\n'.join(chosen))
           PY
-          mapfile -t dmgs < /tmp/dmgs
+          dmgs=()
+          while IFS= read -r line; do dmgs+=("$line"); done < /tmp/dmgs
           python3 scripts/make-userdata-full.py "${dmgs[0]}" "${dmgs[1]}" \
             "$target/userdata/userdata-root.json" "$cap" artifacts/userdata-full.sparse
           rm -f "$target/userdata/userdata-root.img"
