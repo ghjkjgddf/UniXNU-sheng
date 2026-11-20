@@ -1,0 +1,253 @@
+name: author-pins iPadOS 27 first install
+
+# Author-pins build: KuriyamaMirai08 device a9f0500 + UniXNU 97437dc + uefi-sheng 66421cb7.
+# This is the source combination of the public build guide. It runs the guide's
+# preparation steps, then package.sh with a NEW Data seed. The private historical
+# baseline / strict prelink acceptance is deliberately not used; this is an
+# experimental first-install build, not a qualified release.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: author-pins-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 360
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      UNIXNU_IPSW_JOBS: 16
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      RUSTUP_TOOLCHAIN: 1.98.0
+      GITHUB_TOKEN: ${{ github.token }}
+      UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+      UNIXNU_SHENG_BOOT_CANDIDATE: "1"
+      UNIXNU_SHENG_AUTHOR_AUDIT: "1"
+
+    steps:
+      - name: Check out author device sources
+        uses: actions/checkout@v4
+        with:
+          repository: KuriyamaMirai08/UniXNU-sheng
+          ref: a9f0500af098f8aee87c86a571638daee92caf26
+          path: device
+          submodules: recursive
+
+      - name: Check out author core
+        uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: 97437dcf7389484a0eeaa8067725ce743aff18ef
+          path: UniXNU
+          submodules: recursive
+
+      - name: Check out author UEFI
+        uses: actions/checkout@v4
+        with:
+          repository: UniXNU/uefi-sheng
+          ref: 66421cb7bb5694843aec8de1ca3d1de4c20cca38
+          path: uefi-sheng
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          brew install dtc llvm lld cmake mtools ninja glslang shaderc \
+            spirv-tools bison pkgconf rustup zstd
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o /tmp/ipsw.tgz \
+            "https://github.com/blacktop/ipsw/releases/download/v3.1.749/ipsw_3.1.749_macOS_universal.tar.gz"
+          tar -xzf /tmp/ipsw.tgz -C "$HOME/.local/bin" ipsw
+          chmod +x "$HOME/.local/bin/ipsw"
+          {
+            echo "$HOME/.local/bin"
+            echo "$HOME/.cargo/bin"
+            echo "$(brew --prefix)/opt/llvm/bin"
+            echo "$(brew --prefix)/opt/lld/bin"
+            echo "$(brew --prefix)/opt/bison/bin"
+          } >> "$GITHUB_PATH"
+          rustup toolchain install 1.98.0 --profile minimal --component rust-src
+          mkdir -p "$HOME/.cargo/bin"
+          ln -sf "$(command -v rustup)" "$HOME/.cargo/bin/cargo"
+          ln -sf "$(command -v rustup)" "$HOME/.cargo/bin/rustc"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Check the platform seed
+        run: |
+          if ! [[ "$UNIXNU_UNIQUE_CHIP_ID" =~ ^[0-9a-fA-F]{8}$ ]]; then
+            echo 'Set the repository secret UNIXNU_UNIQUE_CHIP_ID to the 8-hex platform seed of the device.' >&2
+            exit 1
+          fi
+
+      - name: Prepare the author framework
+        run: |
+          set -euo pipefail
+          export UNIXNU_DEVICE="$PWD/device"
+          export UNIXNU_ROOT="$PWD/UniXNU"
+          export UNIXNU_UEFI="$PWD/uefi-sheng"
+          export BUILD_ROOT="$PWD/buildroot"
+          mkdir -p "$BUILD_ROOT/evidence"
+          cd "$UNIXNU_DEVICE"
+          python3 scripts/prepare-package-ci.py --unixnu "$UNIXNU_ROOT"
+          python3 - <<'PY'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path(os.environ['UNIXNU_DEVICE']) / 'scripts/repro'))
+          from preserve import apply
+          apply(Path(os.environ['UNIXNU_ROOT']), Path(os.environ['BUILD_ROOT']) / 'evidence')
+          PY
+          git -C "$UNIXNU_ROOT" apply --check "$UNIXNU_DEVICE/patches/build/sheng-reference-archive.patch"
+          git -C "$UNIXNU_ROOT" apply "$UNIXNU_DEVICE/patches/build/sheng-reference-archive.patch"
+          python3 scripts/prepare-sheng-author-audit.py \
+            --unixnu "$UNIXNU_ROOT" --evidence "$BUILD_ROOT/evidence"
+          git -C "$UNIXNU_ROOT" diff --binary > "$BUILD_ROOT/evidence/framework-diff.patch"
+          cd "$UNIXNU_ROOT"
+          python3 scripts/test-fileset-reference.py -v
+          cd "$UNIXNU_DEVICE"
+          python3 scripts/test-author-audit-reference.py \
+            --builder "$UNIXNU_ROOT/scripts/build-fileset-release-reference.py"
+
+      - name: Extract firmware and fetch Wi-Fi sources
+        working-directory: device
+        run: |
+          set -euo pipefail
+          python3 scripts/extract-files.py
+          python3 scripts/extract-files.py --check
+          bash drivers/Ath12kWifi/tools/fetch-sources.sh
+          python3 drivers/QcaBluetooth/tools/prepare-linux.py
+          python3 scripts/stage-bluetooth-firmware.py .cache/bt-stage --fetch
+          python3 scripts/download-sheng-firmware.py --connections 16
+          python3 scripts/extract-sheng-firmware.py --delete-archive
+          python3 scripts/import-sheng-uefi.py
+
+      - name: Build boot image, payload and kernel
+        working-directory: device
+        run: |
+          set -euo pipefail
+          scripts/package.sh --os 27 --uefi ../uefi-sheng --init-data -j 3
+
+      - name: Build the iPadOS root image
+        working-directory: UniXNU
+        run: |
+          set -euo pipefail
+          ./unixnu build userdata --os 27 -D ../device
+
+      - name: Build a full-partition Android sparse image
+        working-directory: device
+        run: |
+          set -euo pipefail
+          target=../UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27
+          cap=$(python3 - <<'PY'
+          import tomllib
+          board = tomllib.load(open('board.toml', 'rb'))
+          u = board['userdata']
+          print((u['last_lba'] - u['first_lba'] + 1) * u.get('lba_bytes', 4096))
+          PY
+          )
+          mkdir -p artifacts
+          python3 - "$target" > /tmp/dmgs <<'PY'
+          import json, pathlib, plistlib, subprocess, sys
+          root = pathlib.Path(sys.argv[1])
+          pins = json.loads((root / 'userdata/userdata-root.json').read_text())
+          ipsw = root.parents[2] / 'ipsw'
+          def total(path):
+              info = plistlib.loads(subprocess.check_output(['hdiutil', 'imageinfo', '-plist', str(path)]))
+              return info['Size Information']['Total Bytes']
+          sizes = {}
+          for path in sorted(ipsw.rglob('*.dmg')):
+              sizes.setdefault(total(path), path)
+          chosen = []
+          for window in pins['windows']:
+              path = sizes.get(window['size'])
+              if path is None:
+                  raise SystemExit(f"no .dmg for window {window['name']} size {window['size']}")
+              chosen.append(str(path))
+          print('\n'.join(chosen))
+          PY
+          mapfile -t dmgs < /tmp/dmgs
+          python3 scripts/make-userdata-full.py "${dmgs[0]}" "${dmgs[1]}" \
+            "$target/userdata/userdata-root.json" "$cap" artifacts/userdata-full.sparse
+          rm -f "$target/userdata/userdata-root.img"
+
+      - name: Stage artifacts
+        working-directory: device
+        run: |
+          set -euo pipefail
+          target=../UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27
+          cp "$target/boot/boot.img" artifacts/
+          cp "$target/payload/payload.img" artifacts/
+          cp "$target/kernel/kernel.macho" artifacts/
+          cp "$target/runtime/data.dbr" artifacts/
+          cp "$target/userdata/userdata-root.json" artifacts/
+          zstd -T0 -3 --sparse artifacts/userdata-full.sparse \
+            -o artifacts/userdata-full.sparse.zst
+          split -b 1900m -d -a 2 artifacts/userdata-full.sparse.zst \
+            artifacts/userdata-full.sparse.zst.part
+          rm -f artifacts/userdata-full.sparse artifacts/userdata-full.sparse.zst
+          mkdir -p artifacts/a artifacts/b
+          i=0
+          for f in artifacts/userdata-full.sparse.zst.part*; do
+            if [ "$i" -lt 3 ]; then mv "$f" artifacts/a/; else mv "$f" artifacts/b/; fi
+            i=$((i + 1))
+          done
+          : > artifacts/SHA256SUMS.txt
+          for f in artifacts/* artifacts/a/* artifacts/b/*; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f")
+            [ "$name" = SHA256SUMS.txt ] && continue
+            (cd "$(dirname "$f")" && shasum -a 256 "$name") >> artifacts/SHA256SUMS.txt
+          done
+          ls -lh artifacts artifacts/a artifacts/b
+
+      - name: Upload images and installation seed
+        uses: actions/upload-artifact@v4
+        with:
+          name: author-images
+          path: |
+            device/artifacts/boot.img
+            device/artifacts/payload.img
+            device/artifacts/kernel.macho
+            device/artifacts/data.dbr
+            device/artifacts/userdata-root.json
+            device/artifacts/SHA256SUMS.txt
+          retention-days: 1
+
+      - name: Upload userdata A
+        uses: actions/upload-artifact@v4
+        with:
+          name: author-userdata-a
+          path: device/artifacts/a/*
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload userdata B
+        uses: actions/upload-artifact@v4
+        with:
+          name: author-userdata-b
+          path: device/artifacts/b/*
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: warn
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: author-logs
+          path: |
+            UniXNU/out/sheng/**/logs/*.log
+            UniXNU/out/sheng/**/tree/build/xnu/fileset-reference/**/*.log
+            UniXNU/out/sheng/**/tree/build/xnu/fileset-reference/**/*.json
+          retention-days: 3
+          if-no-files-found: warn
