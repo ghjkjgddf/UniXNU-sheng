@@ -85,8 +85,10 @@ jobs:
           } >> "$GITHUB_PATH"
           rustup toolchain install 1.98.0 --profile minimal --component rust-src
           mkdir -p "$HOME/.cargo/bin"
-          ln -sf "$(command -v rustup)" "$HOME/.cargo/bin/cargo"
-          ln -sf "$(command -v rustup)" "$HOME/.cargo/bin/rustc"
+          # macOS resolves a symlink to rustup's real path, so rustup would not
+          # recognize the proxy name. Copies keep argv[0] as cargo/rustc.
+          cp "$(command -v rustup)" "$HOME/.cargo/bin/cargo"
+          cp "$(command -v rustup)" "$HOME/.cargo/bin/rustc"
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
