@@ -19,9 +19,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-26-intel
+    runs-on: macos-26
     timeout-minutes: 360
     env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       UNIXNU_IPSW_JOBS: 16
       HOMEBREW_NO_AUTO_UPDATE: 1
       RUSTUP_TOOLCHAIN: 1.98.0
