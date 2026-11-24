@@ -1,4 +1,4 @@
-name: package
+﻿name: package
 
 # scripts/package.sh of this repository on a macOS runner, with the UniXNU and uefi-sheng
 # checkouts beside it, the layout board.toml names. The platform seed comes from the
@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   package:
-    runs-on: macos-26-intel
+    runs-on: macos-26
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
@@ -42,8 +42,8 @@ jobs:
           submodules: recursive
       - uses: actions/checkout@v4
         with:
-          repository: aipxu7xs/UniXNU
-          ref: 2e7f490dbce3f6e11f53d37face91934e277649e # Wi-Fi runtime and Data firmware integration
+          repository: UniXNU/UniXNU
+          ref: 82b847c4ac3f68a57024b3082ffa3a03442defd9 # Wi-Fi runtime and Data firmware integration
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
@@ -53,40 +53,22 @@ jobs:
           submodules: recursive
       - name: tools
         run: |
-          brew install dtc llvm lld cmake mtools ninja glslang shaderc spirv-tools bison pkgconf rustup
-          # ipsw: the blacktop/tap cask no longer passes Homebrew's validator
-          # ("invalid 'zap' stanza"), so fetch the official release binary.
-          mkdir -p "$HOME/.local/bin"
-          curl -fsSL -o /tmp/ipsw.tgz "https://github.com/blacktop/ipsw/releases/download/v3.1.749/ipsw_3.1.749_macOS_universal.tar.gz"
-          tar -xzf /tmp/ipsw.tgz -C "$HOME/.local/bin" ipsw
-          chmod +x "$HOME/.local/bin/ipsw"
-                    export PATH="$HOME/.local/bin:$PATH"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          brew install dtc llvm lld cmake mtools ninja glslang shaderc spirv-tools bison pkgconf rustup blacktop/tap/ipsw
           {
             echo "$HOME/.cargo/bin"
-            echo "$(brew --prefix)/opt/llvm/bin"
-            echo "$(brew --prefix)/opt/lld/bin"
-            echo "$(brew --prefix)/opt/bison/bin"
+            echo "/opt/homebrew/opt/llvm/bin"
+            echo "/opt/homebrew/opt/lld/bin"
+            echo "/opt/homebrew/opt/bison/bin"
           } >> "$GITHUB_PATH"
           rustup toolchain install 1.98.0 --profile minimal --component rust-src
-          # rustup toolchain install alone does not create the ~/.cargo/bin
-          # proxies (Homebrew installs the rustup binary without rustup-init),
-          # so put the toolchain's own bin dir on PATH for later steps.
-                    # Homebrew's rustup has no rustup-init proxies, so create them:
-          # the bridge build calls `cargo +1.98.0`, which only the rustup
-          # proxy (not the raw toolchain cargo) can handle.
-          mkdir -p "$HOME/.cargo/bin"
-          ln -sf "$(command -v rustup)" "$HOME/.cargo/bin/cargo"
-          ln -sf "$(command -v rustup)" "$HOME/.cargo/bin/rustc"
-          export PATH="$HOME/.cargo/bin:$PATH"
           # Fail fast, naming the tool, before forty minutes of build.
           ok=1
           for t in clang xcodebuild make git ninja cmake dtc fdtget fdtput aea compression_tool \
-                   mformat mcopy ipsw cargo rustc; do
+                   mformat mcopy ipsw; do
             command -v "$t" >/dev/null || { echo "missing tool: $t"; ok=0; }
           done
           for t in lld-link llvm-lib llvm-rc llvm-nm llvm-objcopy; do
-            [ -f "$(brew --prefix)/opt/llvm/bin/$t" ] || [ -f "$(brew --prefix)/opt/lld/bin/$t" ] || { echo "missing tool: $t"; ok=0; }
+            [ -f "/opt/homebrew/opt/llvm/bin/$t" ] || [ -f "/opt/homebrew/opt/lld/bin/$t" ] || { echo "missing tool: $t"; ok=0; }
           done
           [ "$ok" = 1 ]
       - name: platform seed
@@ -140,25 +122,6 @@ jobs:
           if not path.is_file() and os.environ['INIT_DATA'] != 'true':
               raise SystemExit('No saved seed. Supply the ORIGINAL seed for an existing installation, or select init_data for a FIRST installation')
           PY
-      - name: extract proprietary firmware
-        working-directory: device
-        run: |
-          python3 scripts/extract-files.py
-          python3 scripts/extract-files.py --check
-      - name: fetch Ath12kWifi sources
-        working-directory: device
-        run: |
-          # releng/15.1 is a moving branch; fetch-sources.py clones the branch tip but
-          # the lock pins an older commit, so pre-seed the exact locked FreeBSD commit.
-          FREEBSD_COMMIT=95719d8a895bf8170851e9844d9b4092b1d2b6fe
-          if [ ! -d drivers/Ath12kWifi/deps/freebsd/.git ]; then
-            git init -q drivers/Ath12kWifi/deps/freebsd
-            git -C drivers/Ath12kWifi/deps/freebsd remote add origin https://github.com/freebsd/freebsd-src.git
-            git -C drivers/Ath12kWifi/deps/freebsd sparse-checkout init --cone
-            git -C drivers/Ath12kWifi/deps/freebsd fetch -q --depth 1 --filter=blob:none origin "$FREEBSD_COMMIT"
-            git -C drivers/Ath12kWifi/deps/freebsd checkout -q FETCH_HEAD
-          fi
-          python3 drivers/Ath12kWifi/tools/fetch-sources.py
       - name: package
         working-directory: device
         env:
@@ -172,6 +135,23 @@ jobs:
             args+=(--init-data)
           fi
           scripts/package.sh "${args[@]}"
+      - name: userdata root image
+        if: inputs.os == '27'
+        working-directory: device
+        env:
+          UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+        run: |
+          python3 ../UniXNU/unixnu build userdata -D . --os 27
+      - name: upload userdata
+        if: inputs.os == '27'
+        uses: actions/upload-artifact@v4
+        with:
+          name: userdata-27
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            UniXNU/out/sheng/*/*/userdata/userdata-root.img
+            UniXNU/out/sheng/*/*/userdata/userdata-root.json
       - uses: actions/cache/save@v4
         if: always() && inputs.os == '27' && steps.data-cache.outputs.cache-hit != 'true' && hashFiles('UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr') != ''
         with:
@@ -184,7 +164,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: installation-seed-${{ inputs.os }}
-          retention-days: 14
+          retention-days: 1
           path: |
             UniXNU/out/sheng/*/*/runtime/data.dbr
             UniXNU/out/sheng/*/*/runtime/inputs.json
@@ -192,10 +172,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: images-${{ inputs.os }}
-          retention-days: 14
+          retention-days: 1
           if-no-files-found: error
           path: |
             UniXNU/out/sheng/*/*/boot/boot.img
             UniXNU/out/sheng/*/*/payload/payload.img
             UniXNU/out/sheng/*/*/kernel/kernel.macho
             UniXNU/out/sheng/*/*/package.manifest.json
+
